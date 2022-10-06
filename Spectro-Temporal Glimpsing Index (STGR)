@@ -1,0 +1,118 @@
+# -*- coding: utf-8 -*-
+"""
+STGI. This script serves as a basis for the development of STGI as a loss function.
+"""
+
+
+import functools
+import scipy.io as sio
+import tensorflow as tf
+import librosa
+import numpy as np
+smallVal = tf.constant(0.0000000001)  # To avoid dividing by zero.
+thresholds = tf.constant(sio.loadmat('thresholds.mat')['thresholds'], dtype=tf.float32)
+s_filters = tf.constant(sio.loadmat('s_filters_padded')['sfilt'], dtype=tf.float32)[:, tf.newaxis, tf.newaxis, :]  # Spectral 1D filters.
+t_filters = tf.constant(sio.loadmat('t_filters_padded')['tfilt'], dtype=tf.float32)[tf.newaxis, :, tf.newaxis, :]  # Temporal 1D filters.
+mel_mat = tf.constant(sio.loadmat('Mel_Matlab.mat')['mel_matlab'], dtype=tf.float32)  # Mel filterbank.
+cw_base = tf.constant(sio.loadmat('Window_Mat_154.mat')['window_function'], dtype=tf.float32)
+
+
+def sgbfb(log_mel_spec):
+    """ Separated spectro-temporal modulation Gabor filterbank for STGI
+    """
+
+    # Temporally pad log-Mel spectrogram by repeating first and last frames.
+    lm_e = tf.concat([tf.tile(log_mel_spec[:, 0:1], [1, 20]), log_mel_spec, tf.tile(log_mel_spec[:, -1:], [1, 20])],
+                     axis=1)[tf.newaxis, :, :, tf.newaxis]
+    del log_mel_spec
+    out = tf.nn.conv2d(input=lm_e, filters=s_filters, strides=1, padding='SAME')  # Spectral 1D filtering.
+    del lm_e
+    out = tf.reshape(tf.transpose(out, [0, 3, 1, 2]), [1, 130 * 11, -1, 1])
+    out = tf.nn.conv2d(input=out, filters=t_filters, strides=1, padding='SAME')  # Temporal 1D filtering.
+    return tf.transpose(tf.reshape(out[0:1, :, 20:-20, :], [11, 130, -1, 4]), [0, 3, 1, 2])
+
+
+def my_sigmoid(x):
+    return tf.constant(1.0) / (tf.constant(1.0) + tf.math.exp(-tf.constant(40.0) * x))
+
+
+def log10(x):
+    numerator = tf.math.log(x)
+    denominator = tf.math.log(tf.constant(10, dtype=numerator.dtype))
+    return numerator / denominator
+
+
+def custom_window(frame_length, dtype):
+    return cw_base
+
+
+cwindow_fn = functools.partial(custom_window)  # Window.
+
+
+def stgi(x, y):
+    """ STGI as a loss function for speech enhancement purposes
+        x: clean reference signal
+        y: predicted signal
+    """
+
+    # To the magnitude STFT domain.
+    x_stft = tf.abs(tf.signal.stft(x, 256, 128, 1024, tf.signal.hann_window, pad_end=False)) / tf.constant(1024.0)
+    y_stft = tf.abs(tf.signal.stft(y, 256, 128, 1024, tf.signal.hann_window, pad_end=False)) / tf.constant(1024.0)
+
+    # To the log-Mel domain.
+    mel_x = tf.matmul(x_stft, mel_mat)
+    mel_y = tf.matmul(y_stft, mel_mat)
+    del x_stft
+    del y_stft
+    lmel_x = tf.transpose(tf.math.maximum(tf.constant(-20.0), tf.math.minimum(tf.constant(0.0),
+                                                                              tf.constant(20.0) * log10(
+                                                                                  tf.math.maximum(mel_x, tf.constant(
+                                                                                      0.0)))) + tf.constant(130.0)))
+    lmel_y = tf.transpose(tf.math.maximum(tf.constant(-20.0), tf.math.minimum(tf.constant(0.0),
+                                                                              tf.constant(20.0) * log10(
+                                                                                  tf.math.maximum(mel_y, tf.constant(
+                                                                                      0.0)))) + tf.constant(130.0)))
+
+    # To the spectro-temporal modulation domain.
+    X_hat = sgbfb(lmel_x)
+    Y_hat = sgbfb(lmel_y)
+    del lmel_x
+    del lmel_y
+
+    # Intelligibility metric.
+    index = 0
+    rho = tf.zeros((1,))
+    for n in range(40, X_hat.shape[3]):
+        X_seg = tf.slice(X_hat, [0, 0, 0, n - 40], [11, 4, 130, 40])
+        Y_seg = tf.slice(Y_hat, [0, 0, 0, n - 40], [11, 4, 130, 40])
+        # Row normalization.
+        X_seg = X_seg - tf.math.reduce_mean(X_seg, axis=3, keepdims=True)
+        Y_seg = Y_seg - tf.math.reduce_mean(Y_seg, axis=3, keepdims=True)
+        X_seg = X_seg / (tf.math.sqrt(tf.math.reduce_sum(X_seg * X_seg, axis=3, keepdims=True)) + smallVal)
+        Y_seg = Y_seg / (tf.math.sqrt(tf.math.reduce_sum(Y_seg * Y_seg, axis=3, keepdims=True)) + smallVal)
+        # Column normalization.
+        X_seg = X_seg - tf.math.reduce_mean(X_seg, axis=2, keepdims=True)
+        Y_seg = Y_seg - tf.math.reduce_mean(Y_seg, axis=2, keepdims=True)
+        X_seg = X_seg / (tf.math.sqrt(tf.math.reduce_sum(X_seg * X_seg, axis=2, keepdims=True)) + smallVal)
+        Y_seg = Y_seg / (tf.math.sqrt(tf.math.reduce_sum(Y_seg * Y_seg, axis=2, keepdims=True)) + smallVal)
+        # Similarity measure.
+        d = tf.math.reduce_mean(tf.math.reduce_sum(X_seg * Y_seg, axis=2, keepdims=False), axis=2, keepdims=False)
+        del X_seg
+        del Y_seg
+        # Glimpse detection.
+        # rho = rho + tf.math.reduce_mean((tf.math.sign(d - thresholds) + tf.constant(1.0)) / tf.constant(2.0))
+        rho = rho + tf.math.reduce_mean(my_sigmoid(d - thresholds))
+        index += 1
+
+    del X_hat
+    del Y_hat
+    mean_rho = rho / index
+    return mean_rho.numpy()[0]
+
+if __name__ == '__main__':
+    # x, srate = librosa.load('Clean.wav', sr=8000)
+    # y, srate = librosa.load('Noisy.wav', sr=8000)
+    x = np.random.randn(1, 20000)
+    y = np.random.randn(1, 20000)
+    rho = stgi(x, y)
+    print(rho)
