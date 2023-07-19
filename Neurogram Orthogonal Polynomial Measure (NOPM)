@@ -92,7 +92,7 @@ end
 
 function xFeatures=apply_moments(neurogram,polynomial,MN,VH)
 fun = @(block_struct) block_processing(block_struct.data,polynomial);
-xFeatures = blockproc(neurogram,MN,fun,'BorderSize',VH,'TrimBorder',true,'PadPartialBlocks',true,'UseParallel',true);
+xFeatures = blockproc(neurogram,MN,fun,'BorderSize',VH,'TrimBorder',true,'PadPartialBlocks', true,'UseParallel', false);
 end
 function blk_moments= block_processing(in_array,polynomial)
 global all_blocks item
