@@ -4,19 +4,6 @@ from scipy.signal import convolve2d
 from skimage.util import view_as_blocks
 import matplotlib.pyplot as plt
 
-# Load the clean and noisy signals
-
-#clean_signal_filepath = '/content/drive/MyDrive/DNS_challange_dataset/SOPM_dataset/clean/clean_signal_9.wav'
-#noisy_signal_filepath = '/content/drive/MyDrive/DNS_challange_dataset/SOPM_dataset/noisy/noisy_clean_9_noise_1_SNR10.wav'
-
-clean_signal, sr_clean = librosa.load(clean_signal_filepath, sr=None)
-noisy_signal, sr_noisy = librosa.load(noisy_signal_filepath, sr=None)
-
-# Ensure the sampling rates match
-if sr_clean != sr_noisy:
-    raise ValueError("Sampling rates of the clean and noisy signals must match.")
-
-
 
 # Main function to calculate SOPM score between two audio files
 def SOPM_from_audio(clean_signal, noisy_signal, MN=[4, 4], VH=None, moment_type='K', K_p=0.9):
@@ -139,6 +126,24 @@ def krawtchouk(N, p, Ord):
 
     return K[:Ord, :N]
 
+
+
+
+
+
+
 # Calculate and display SOPM score
+# Load the clean and noisy signals
+
+#clean_signal_filepath = '/content/drive/MyDrive/DNS_challange_dataset/SOPM_dataset/clean/clean_signal_9.wav'
+#noisy_signal_filepath = '/content/drive/MyDrive/DNS_challange_dataset/SOPM_dataset/noisy/noisy_clean_9_noise_1_SNR10.wav'
+
+clean_signal, sr_clean = librosa.load(clean_signal_filepath, sr=None)
+noisy_signal, sr_noisy = librosa.load(noisy_signal_filepath, sr=None)
+
+# Ensure the sampling rates match
+if sr_clean != sr_noisy:
+    raise ValueError("Sampling rates of the clean and noisy signals must match.")
+
 sopm_score = SOPM_from_audio(clean_signal, noisy_signal)
 print(f"SOPM Score: {sopm_score}")
